@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import re
 from typing import Any
 from urllib.parse import urlencode
 
@@ -14,66 +15,24 @@ logger = logging.getLogger(__name__)
 
 ZYTE_API_URL = "https://api.zyte.com/v1/extract"
 
-# Primary: recommendations API (verified working locally)
-YAD2_RECOMMENDATIONS_URL = "https://gw.yad2.co.il/recommendations/items/realestate"
-# Fallback: realestate/rent endpoint
-YAD2_REALESTATE_URL = "https://gw.yad2.co.il/realestate/rent"
+YAD2_SEARCH_URL = "https://www.yad2.co.il/realestate/rent"
 
 
 class Yad2Scraper:
     def __init__(self, config: Config) -> None:
         self.config = config
+        self._zyte_auth = base64.b64encode(
+            f"{config.zyte_api_key}:".encode()
+        ).decode()
 
     async def fetch_listings(self) -> list[dict[str, Any]]:
-        """Fetch Yad2 listings via Zyte API, trying two endpoints."""
-        listings = self._fetch(self._build_recommendations_url())
-        if listings:
-            return listings
+        """Fetch Yad2 listings via Zyte browser rendering."""
+        url = self._build_search_url()
+        return self._fetch_browser(url)
 
-        logger.warning("Primary endpoint returned 0 results, trying fallback")
-        listings = self._fetch(self._build_realestate_url())
-        if listings:
-            return listings
+    # ── URL builder ──────────────────────────────────────────────────
 
-        logger.error("Both Yad2 endpoints failed to return listings")
-        return []
-
-    # ── URL builders ─────────────────────────────────────────────────
-
-    def _boolean_filters(self) -> dict[str, str]:
-        filters: dict[str, str] = {}
-        if self.config.balcony:
-            filters["balcony"] = "1"
-        if self.config.parking:
-            filters["parking"] = "1"
-        if self.config.elevator:
-            filters["elevator"] = "1"
-        if self.config.mamad:
-            filters["shelter"] = "1"
-        return filters
-
-    def _area_params(self) -> dict[str, str]:
-        params: dict[str, str] = {}
-        if self.config.area:
-            params["area"] = self.config.area
-        if self.config.region:
-            params["region"] = ",".join(self.config.region)
-        return params
-
-    def _build_recommendations_url(self) -> str:
-        params: dict[str, str] = {
-            "type": "home",
-            "count": "40",
-            "categoryId": "2",
-            "roomValues": ",".join(self.config.rooms),
-            "cityValues": self.config.city_id,
-            "subCategoriesIds": "2",
-        }
-        params.update(self._area_params())
-        params.update(self._boolean_filters())
-        return f"{YAD2_RECOMMENDATIONS_URL}?{urlencode(params)}"
-
-    def _build_realestate_url(self) -> str:
+    def _build_search_url(self) -> str:
         params: dict[str, str] = {
             "cityValues": self.config.city_id,
             "maxPrice": str(self.config.max_price),
@@ -81,36 +40,37 @@ class Yad2Scraper:
         }
         if self.config.min_price:
             params["minPrice"] = str(self.config.min_price)
-        params.update(self._area_params())
-        params.update(self._boolean_filters())
-        return f"{YAD2_REALESTATE_URL}?{urlencode(params)}"
+        if self.config.area:
+            params["area"] = self.config.area
+        if self.config.region:
+            params["region"] = ",".join(self.config.region)
+        if self.config.balcony:
+            params["balcony"] = "1"
+        if self.config.parking:
+            params["parking"] = "1"
+        if self.config.elevator:
+            params["elevator"] = "1"
+        if self.config.mamad:
+            params["shelter"] = "1"
+        return f"{YAD2_SEARCH_URL}?{urlencode(params)}"
 
-    # ── Zyte API fetch ───────────────────────────────────────────────
+    # ── Zyte browser fetch ───────────────────────────────────────────
 
-    def _fetch(self, target_url: str) -> list[dict[str, Any]]:
+    def _fetch_browser(self, target_url: str) -> list[dict[str, Any]]:
         try:
-            logger.info("Fetching Yad2 via Zyte API: %s", target_url)
-
-            auth = base64.b64encode(
-                f"{self.config.zyte_api_key}:".encode()
-            ).decode()
+            logger.info("Fetching Yad2 via Zyte browserHtml: %s", target_url)
 
             resp = requests.post(
                 ZYTE_API_URL,
                 headers={
-                    "Authorization": f"Basic {auth}",
+                    "Authorization": f"Basic {self._zyte_auth}",
                     "Content-Type": "application/json",
                 },
                 json={
                     "url": target_url,
-                    "httpResponseBody": True,
-                    "httpRequestMethod": "GET",
-                    "customHttpRequestHeaders": [
-                        {"name": "Accept", "value": "application/json"},
-                        {"name": "Referer", "value": "https://www.yad2.co.il/"},
-                    ],
+                    "browserHtml": True,
                 },
-                timeout=60,
+                timeout=90,
             )
             logger.info("Zyte API status: %d", resp.status_code)
 
@@ -119,48 +79,78 @@ class Yad2Scraper:
                 return []
 
             zyte_data = resp.json()
-            body_b64 = zyte_data.get("httpResponseBody", "")
-            if not body_b64:
-                logger.warning("Zyte API returned empty httpResponseBody")
+            html = zyte_data.get("browserHtml", "")
+            if not html:
+                logger.warning("Zyte API returned empty browserHtml")
                 return []
 
-            body_bytes = base64.b64decode(body_b64)
-            data = json.loads(body_bytes)
-            return self._parse_api_response(data)
+            logger.info("Got %d chars of HTML", len(html))
+            return self._parse_next_data(html)
 
         except Exception:
             logger.exception("Zyte API request failed")
             return []
 
-    # ── Response parsing ─────────────────────────────────────────────
+    # ── HTML / __NEXT_DATA__ parsing ─────────────────────────────────
 
-    def _parse_api_response(self, data: dict) -> list[dict[str, Any]]:
-        """Parse Yad2 API response (handles multiple response formats)."""
-        raw_data = data.get("data", {})
+    def _parse_next_data(self, html: str) -> list[dict[str, Any]]:
+        match = re.search(
+            r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>',
+            html,
+            re.DOTALL,
+        )
+        if not match:
+            logger.warning("__NEXT_DATA__ not found in HTML")
+            logger.debug("HTML preview: %s", html[:500])
+            return []
 
-        items: list[dict] = []
+        try:
+            next_data = json.loads(match.group(1))
+        except json.JSONDecodeError:
+            logger.exception("Failed to parse __NEXT_DATA__ JSON")
+            logger.warning("Raw __NEXT_DATA__ preview: %s", match.group(1)[:500])
+            return []
 
-        # Format 1: feed-search style — data.feed.feed_items
-        if isinstance(raw_data, dict):
-            feed = raw_data.get("feed", {})
-            items = feed.get("feed_items", [])
+        page_props = next_data.get("props", {}).get("pageProps", {})
+        logger.info("__NEXT_DATA__ pageProps keys: %s", list(page_props.keys()))
 
-        # Format 2: recommendations style — data is list of lists
-        if not items and isinstance(raw_data, list):
-            for group in raw_data:
-                if isinstance(group, list):
-                    items.extend(group)
-                elif isinstance(group, dict):
-                    items.append(group)
+        # Try known locations for feed items
+        feed = page_props.get("feed", {})
+        items = feed.get("feed_items", [])
+
+        if not items:
+            # Alternative: searchResult or similar
+            search_result = page_props.get("searchResult", {})
+            items = search_result.get("items", [])
+
+        if not items:
+            # Try data.feed.feed_items
+            data = page_props.get("data", {})
+            if isinstance(data, dict):
+                items = data.get("feed", {}).get("feed_items", [])
+
+        if not items:
+            logger.warning("No feed items found in pageProps. Keys: %s", list(page_props.keys()))
+            # Log deeper structure to help debug
+            for key, val in page_props.items():
+                if isinstance(val, dict):
+                    logger.info("  pageProps[%s] keys: %s", key, list(val.keys()))
+                elif isinstance(val, list):
+                    logger.info("  pageProps[%s]: list of %d items", key, len(val))
+            return []
 
         listings = []
         for item in items:
+            if not isinstance(item, dict):
+                continue
             listing = self._normalize(item)
             if listing and self._matches_price(listing):
                 listings.append(listing)
 
-        logger.info("Parsed %d listings from Yad2 response", len(listings))
+        logger.info("Parsed %d listings from __NEXT_DATA__", len(listings))
         return listings
+
+    # ── Listing normalization ────────────────────────────────────────
 
     def _matches_price(self, listing: dict[str, Any]) -> bool:
         try:
@@ -175,7 +165,7 @@ class Yad2Scraper:
         return True
 
     def _normalize(self, item: dict) -> dict[str, Any] | None:
-        token = item.get("token") or item.get("id")
+        token = item.get("token") or item.get("id") or item.get("orderId")
         if not token:
             return None
 
