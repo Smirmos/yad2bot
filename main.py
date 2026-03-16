@@ -43,7 +43,7 @@ async def poll_once(scraper: Yad2Scraper, db: Database, notifier: TelegramNotifi
 
 async def main() -> None:
     config = Config.from_env()
-    db = Database(config.db_path)
+    db = Database(config.redis_url)
     scraper = Yad2Scraper(config)
     notifier = TelegramNotifier(config.telegram_token, config.telegram_chat_id)
 

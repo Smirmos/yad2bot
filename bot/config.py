@@ -15,7 +15,7 @@ class Config:
     area: str = ""
     region: list[str] = field(default_factory=list)
     check_interval_minutes: int = 15
-    db_path: str = "seen_listings.db"
+    redis_url: str = ""
     scraper_api_key: str = ""
     balcony: bool = False
     parking: bool = False
@@ -37,7 +37,7 @@ class Config:
             area=os.getenv("AREA", ""),
             region=region,
             check_interval_minutes=int(os.getenv("CHECK_INTERVAL_MINUTES", "15")),
-            db_path=os.getenv("DB_PATH", "seen_listings.db"),
+            redis_url=os.environ["REDIS_URL"],
             scraper_api_key=os.environ["SCRAPER_API_KEY"],
             balcony=os.getenv("FILTER_BALCONY", "0") == "1",
             parking=os.getenv("FILTER_PARKING", "0") == "1",
