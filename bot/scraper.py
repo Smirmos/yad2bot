@@ -93,6 +93,9 @@ class Yad2Scraper:
 
     # ── HTML / __NEXT_DATA__ parsing ─────────────────────────────────
 
+    # Feed categories we want (real listings, not boosted ads)
+    FEED_KEYS = ("private", "agency")
+
     def _parse_next_data(self, html: str) -> list[dict[str, Any]]:
         match = re.search(
             r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>',
@@ -112,32 +115,32 @@ class Yad2Scraper:
             return []
 
         page_props = next_data.get("props", {}).get("pageProps", {})
-        logger.info("__NEXT_DATA__ pageProps keys: %s", list(page_props.keys()))
-
-        # Try known locations for feed items
         feed = page_props.get("feed", {})
-        items = feed.get("feed_items", [])
 
-        if not items:
-            # Alternative: searchResult or similar
-            search_result = page_props.get("searchResult", {})
-            items = search_result.get("items", [])
-
-        if not items:
-            # Try data.feed.feed_items
-            data = page_props.get("data", {})
-            if isinstance(data, dict):
-                items = data.get("feed", {}).get("feed_items", [])
-
-        if not items:
-            logger.warning("No feed items found in pageProps. Keys: %s", list(page_props.keys()))
-            # Log deeper structure to help debug
-            for key, val in page_props.items():
-                if isinstance(val, dict):
-                    logger.info("  pageProps[%s] keys: %s", key, list(val.keys()))
-                elif isinstance(val, list):
-                    logger.info("  pageProps[%s]: list of %d items", key, len(val))
+        if not isinstance(feed, dict):
+            logger.warning("pageProps['feed'] is not a dict: %s", type(feed).__name__)
             return []
+
+        # Log feed structure
+        for key, val in feed.items():
+            count = len(val) if isinstance(val, list) else "N/A"
+            logger.info("  feed[%s]: %s items", key, count)
+
+        # Collect items from private + agency only
+        items: list[dict] = []
+        for key in self.FEED_KEYS:
+            group = feed.get(key, [])
+            if isinstance(group, list):
+                items.extend(group)
+                logger.info("feed[%s]: %d items", key, len(group))
+
+        if not items:
+            logger.warning("No items in feed[private/agency]")
+            return []
+
+        # Log first item's full structure for field mapping
+        logger.info("Sample listing keys: %s", list(items[0].keys()))
+        logger.info("Sample listing: %s", json.dumps(items[0], ensure_ascii=False, default=str)[:1000])
 
         listings = []
         for item in items:
