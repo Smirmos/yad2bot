@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any
 from urllib.parse import urlencode
 
@@ -12,7 +11,16 @@ from bot.config import Config
 logger = logging.getLogger(__name__)
 
 SCRAPER_API_URL = "http://api.scraperapi.com"
-YAD2_API_URL = "https://gw.yad2.co.il/feed-search-legacy/realestate/rent"
+
+# Primary: recommendations API (verified working locally)
+YAD2_RECOMMENDATIONS_URL = "https://gw.yad2.co.il/recommendations/items/realestate"
+# Fallback: realestate/rent endpoint
+YAD2_REALESTATE_URL = "https://gw.yad2.co.il/realestate/rent"
+
+HEADERS = {
+    "Accept": "application/json",
+    "X-Requested-With": "XMLHttpRequest",
+}
 
 
 class Yad2Scraper:
@@ -20,19 +28,43 @@ class Yad2Scraper:
         self.config = config
 
     async def fetch_listings(self) -> list[dict[str, Any]]:
-        """Fetch Yad2 listings via ScraperAPI."""
+        """Fetch Yad2 listings via ScraperAPI, trying two endpoints."""
+        # Try primary endpoint
+        listings = self._fetch(self._build_recommendations_url())
+        if listings:
+            return listings
+
+        # Try fallback endpoint
+        logger.warning("Primary endpoint returned 0 results, trying fallback")
+        listings = self._fetch(self._build_realestate_url())
+        if listings:
+            return listings
+
+        logger.error("Both Yad2 endpoints failed to return listings")
+        return []
+
+    def _build_recommendations_url(self) -> str:
+        params = {
+            "type": "home",
+            "count": "40",
+            "categoryId": "2",
+            "roomValues": ",".join(self.config.rooms),
+            "cityValues": self.config.city_id,
+            "subCategoriesIds": "2",
+        }
+        return f"{YAD2_RECOMMENDATIONS_URL}?{urlencode(params)}"
+
+    def _build_realestate_url(self) -> str:
         params = {
             "cityValues": self.config.city_id,
             "maxPrice": str(self.config.max_price),
             "roomValues": ",".join(self.config.rooms),
-            "priceOnly": "1",
-            "imageOnly": "1",
         }
         if self.config.min_price:
             params["minPrice"] = str(self.config.min_price)
+        return f"{YAD2_REALESTATE_URL}?{urlencode(params)}"
 
-        target_url = f"{YAD2_API_URL}?{urlencode(params)}"
-
+    def _fetch(self, target_url: str) -> list[dict[str, Any]]:
         try:
             logger.info("Fetching Yad2 via ScraperAPI: %s", target_url)
             resp = requests.get(
@@ -40,8 +72,10 @@ class Yad2Scraper:
                 params={
                     "api_key": self.config.scraper_api_key,
                     "url": target_url,
+                    "render": "false",
                     "country_code": "il",
                 },
+                headers=HEADERS,
                 timeout=60,
             )
             logger.info("ScraperAPI status: %d", resp.status_code)
@@ -60,14 +94,17 @@ class Yad2Scraper:
     # ── Response parsing ─────────────────────────────────────────────
 
     def _parse_api_response(self, data: dict) -> list[dict[str, Any]]:
-        """Parse the Yad2 feed-search-legacy API response."""
+        """Parse Yad2 API response (handles multiple response formats)."""
         raw_data = data.get("data", {})
 
-        # feed-search-legacy wraps items in data.feed.feed_items
-        feed = raw_data.get("feed", {})
-        items = feed.get("feed_items", [])
+        items: list[dict] = []
 
-        # Fall back to recommendations-style response: data is list of lists
+        # Format 1: feed-search style — data.feed.feed_items
+        if isinstance(raw_data, dict):
+            feed = raw_data.get("feed", {})
+            items = feed.get("feed_items", [])
+
+        # Format 2: recommendations style — data is list of lists
         if not items and isinstance(raw_data, list):
             for group in raw_data:
                 if isinstance(group, list):
