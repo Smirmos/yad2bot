@@ -1,215 +1,74 @@
 from __future__ import annotations
 
 import logging
-import random
+import os
 from typing import Any
-from urllib.parse import quote, urlencode
+from urllib.parse import urlencode
 
-import httpx
+import requests
 
 from bot.config import Config
 
 logger = logging.getLogger(__name__)
 
-API_URL = "https://gw.yad2.co.il/recommendations/items/realestate"
-SCRAPER_API_URL = "https://api.scraperapi.com"
-YAD2_SEARCH_URL = "https://www.yad2.co.il/realestate/rent"
-
-USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:133.0) Gecko/20100101 Firefox/133.0",
-]
-
-
-def _build_headers() -> dict[str, str]:
-    ua = random.choice(USER_AGENTS)
-    is_chrome = "Chrome" in ua
-    return {
-        "User-Agent": ua,
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Referer": "https://www.yad2.co.il/",
-        "Origin": "https://www.yad2.co.il",
-        **(
-            {
-                "sec-ch-ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
-                "sec-ch-ua-mobile": "?0",
-                "sec-ch-ua-platform": '"macOS"',
-                "sec-fetch-dest": "empty",
-                "sec-fetch-mode": "cors",
-                "sec-fetch-site": "same-site",
-            }
-            if is_chrome
-            else {}
-        ),
-    }
+SCRAPER_API_URL = "http://api.scraperapi.com"
+YAD2_API_URL = "https://gw.yad2.co.il/feed-search-legacy/realestate/rent"
 
 
 class Yad2Scraper:
     def __init__(self, config: Config) -> None:
         self.config = config
-        self._playwright_available: bool | None = None
 
     async def fetch_listings(self) -> list[dict[str, Any]]:
-        """Try ScraperAPI/httpx first, fall back to Playwright on failure."""
-        listings = await self._fetch_via_httpx()
-        if listings:
-            return listings
-
-        logger.warning("httpx fetch failed or returned 0 results, falling back to Playwright")
-        return await self._fetch_via_playwright()
-
-    # ── httpx (via ScraperAPI when available) ─────────────────────────
-
-    async def _fetch_via_httpx(self) -> list[dict[str, Any]]:
+        """Fetch Yad2 listings via ScraperAPI."""
         params = {
-            "type": "home",
-            "count": "40",
-            "categoryId": "2",
-            "roomValues": ",".join(self.config.rooms),
             "cityValues": self.config.city_id,
-            "subCategoriesIds": "2",
-        }
-
-        target_url = f"{API_URL}?{urlencode(params)}"
-
-        try:
-            headers = _build_headers()
-            async with httpx.AsyncClient(headers=headers, timeout=60, follow_redirects=True) as client:
-                if self.config.scraper_api_key:
-                    # Route through ScraperAPI residential proxy
-                    proxy_params = {
-                        "api_key": self.config.scraper_api_key,
-                        "url": target_url,
-                        "render": "false",
-                        "country_code": "il",
-                    }
-                    url = SCRAPER_API_URL
-                    logger.info("Using ScraperAPI proxy for Yad2 request")
-                    resp = await client.get(url, params=proxy_params)
-                else:
-                    url = API_URL
-                    resp = await client.get(url, params=params)
-
-                logger.info("httpx Yad2 API status: %d", resp.status_code)
-
-                if resp.status_code == 403:
-                    logger.warning("Got 403 — Yad2 blocked the request")
-                    return []
-
-                if resp.status_code != 200:
-                    logger.warning("Yad2 API returned %d: %s", resp.status_code, resp.text[:500])
-                    return []
-
-                data = resp.json()
-                return self._parse_api_response(data)
-
-        except Exception:
-            logger.exception("httpx request failed")
-            return []
-
-    # ── Playwright (headless browser fallback with stealth) ───────────
-
-    async def _fetch_via_playwright(self) -> list[dict[str, Any]]:
-        if self._playwright_available is False:
-            logger.warning("Playwright previously failed to import, skipping")
-            return []
-
-        try:
-            from playwright.async_api import async_playwright
-            from playwright_stealth import stealth_async
-            self._playwright_available = True
-        except ImportError:
-            logger.error("Playwright or playwright-stealth is not installed")
-            self._playwright_available = False
-            return []
-
-        params = {
-            "city": self.config.city_id,
             "maxPrice": str(self.config.max_price),
-            "rooms": f"{min(self.config.rooms)}-{max(self.config.rooms)}",
+            "roomValues": ",".join(self.config.rooms),
+            "priceOnly": "1",
+            "imageOnly": "1",
         }
         if self.config.min_price:
             params["minPrice"] = str(self.config.min_price)
 
-        search_url = f"{YAD2_SEARCH_URL}?{urlencode(params)}"
-        logger.info("Playwright: navigating to %s", search_url)
+        target_url = f"{YAD2_API_URL}?{urlencode(params)}"
 
         try:
-            async with async_playwright() as pw:
-                browser = await pw.chromium.launch(
-                    headless=True,
-                    args=[
-                        "--no-sandbox",
-                        "--disable-dev-shm-usage",
-                        "--disable-blink-features=AutomationControlled",
-                        "--disable-infobars",
-                        "--window-size=1920,1080",
-                    ],
-                )
-                context = await browser.new_context(
-                    locale="he-IL",
-                    user_agent=random.choice(USER_AGENTS),
-                    viewport={"width": 1920, "height": 1080},
-                    java_script_enabled=True,
-                )
-                page = await context.new_page()
-                await stealth_async(page)
+            logger.info("Fetching Yad2 via ScraperAPI: %s", target_url)
+            resp = requests.get(
+                SCRAPER_API_URL,
+                params={
+                    "api_key": self.config.scraper_api_key,
+                    "url": target_url,
+                    "country_code": "il",
+                },
+                timeout=60,
+            )
+            logger.info("ScraperAPI status: %d", resp.status_code)
 
-                api_data: dict | None = None
+            if resp.status_code != 200:
+                logger.warning("ScraperAPI returned %d: %s", resp.status_code, resp.text[:500])
+                return []
 
-                async def capture_api_response(response):
-                    nonlocal api_data
-                    url = response.url
-                    if "recommendations/items/realestate" in url or "feed-search" in url:
-                        try:
-                            body = await response.json()
-                            api_data = body
-                            logger.info("Playwright: captured API response from %s", url)
-                        except Exception:
-                            pass
-
-                page.on("response", capture_api_response)
-
-                # Visit homepage first to get cookies and appear more natural
-                logger.info("Playwright: visiting homepage first")
-                await page.goto("https://www.yad2.co.il/", wait_until="domcontentloaded", timeout=30_000)
-                await page.wait_for_timeout(random.randint(2000, 4000))
-
-                # Now navigate to search
-                await page.goto(search_url, wait_until="networkidle", timeout=60_000)
-                await page.wait_for_timeout(5_000)
-
-                await browser.close()
-
-            if api_data:
-                return self._parse_api_response(api_data)
-
-            logger.warning("Playwright: no API response captured")
-            return []
+            data = resp.json()
+            return self._parse_api_response(data)
 
         except Exception:
-            logger.exception("Playwright scraping failed")
+            logger.exception("ScraperAPI request failed")
             return []
 
     # ── Response parsing ─────────────────────────────────────────────
 
     def _parse_api_response(self, data: dict) -> list[dict[str, Any]]:
-        """Parse the recommendations API response.
+        """Parse the Yad2 feed-search-legacy API response."""
+        raw_data = data.get("data", {})
 
-        Response structure: { "data": [ [item, item, ...] ], "message": "" }
-        """
-        raw_data = data.get("data", [])
+        # feed-search-legacy wraps items in data.feed.feed_items
+        feed = raw_data.get("feed", {})
+        items = feed.get("feed_items", [])
 
-        # data is a list of lists — flatten
-        items: list[dict] = []
-        if isinstance(raw_data, list):
+        # Fall back to recommendations-style response: data is list of lists
+        if not items and isinstance(raw_data, list):
             for group in raw_data:
                 if isinstance(group, list):
                     items.extend(group)
@@ -222,6 +81,7 @@ class Yad2Scraper:
             if listing and self._matches_price(listing):
                 listings.append(listing)
 
+        logger.info("Parsed %d listings from Yad2 response", len(listings))
         return listings
 
     def _matches_price(self, listing: dict[str, Any]) -> bool:
@@ -237,7 +97,7 @@ class Yad2Scraper:
         return True
 
     def _normalize(self, item: dict) -> dict[str, Any] | None:
-        token = item.get("token")
+        token = item.get("token") or item.get("id")
         if not token:
             return None
 

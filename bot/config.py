@@ -28,5 +28,5 @@ class Config:
             city_id=os.getenv("CITY_ID", "5000"),
             check_interval_minutes=int(os.getenv("CHECK_INTERVAL_MINUTES", "15")),
             db_path=os.getenv("DB_PATH", "seen_listings.db"),
-            scraper_api_key=os.getenv("SCRAPER_API_KEY", ""),
+            scraper_api_key=os.environ["SCRAPER_API_KEY"],
         )
