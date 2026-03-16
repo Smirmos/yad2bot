@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import json
 import logging
 from typing import Any
 from urllib.parse import urlencode
@@ -10,17 +12,12 @@ from bot.config import Config
 
 logger = logging.getLogger(__name__)
 
-SCRAPER_API_URL = "http://api.scraperapi.com"
+ZYTE_API_URL = "https://api.zyte.com/v1/extract"
 
 # Primary: recommendations API (verified working locally)
 YAD2_RECOMMENDATIONS_URL = "https://gw.yad2.co.il/recommendations/items/realestate"
 # Fallback: realestate/rent endpoint
 YAD2_REALESTATE_URL = "https://gw.yad2.co.il/realestate/rent"
-
-HEADERS = {
-    "Accept": "application/json",
-    "X-Requested-With": "XMLHttpRequest",
-}
 
 
 class Yad2Scraper:
@@ -28,13 +25,11 @@ class Yad2Scraper:
         self.config = config
 
     async def fetch_listings(self) -> list[dict[str, Any]]:
-        """Fetch Yad2 listings via ScraperAPI, trying two endpoints."""
-        # Try primary endpoint
+        """Fetch Yad2 listings via Zyte API, trying two endpoints."""
         listings = self._fetch(self._build_recommendations_url())
         if listings:
             return listings
 
-        # Try fallback endpoint
         logger.warning("Primary endpoint returned 0 results, trying fallback")
         listings = self._fetch(self._build_realestate_url())
         if listings:
@@ -43,8 +38,9 @@ class Yad2Scraper:
         logger.error("Both Yad2 endpoints failed to return listings")
         return []
 
+    # ── URL builders ─────────────────────────────────────────────────
+
     def _boolean_filters(self) -> dict[str, str]:
-        """Build dict of active boolean filter params."""
         filters: dict[str, str] = {}
         if self.config.balcony:
             filters["balcony"] = "1"
@@ -57,7 +53,6 @@ class Yad2Scraper:
         return filters
 
     def _area_params(self) -> dict[str, str]:
-        """Build dict of area/region params if configured."""
         params: dict[str, str] = {}
         if self.config.area:
             params["area"] = self.config.area
@@ -90,31 +85,51 @@ class Yad2Scraper:
         params.update(self._boolean_filters())
         return f"{YAD2_REALESTATE_URL}?{urlencode(params)}"
 
+    # ── Zyte API fetch ───────────────────────────────────────────────
+
     def _fetch(self, target_url: str) -> list[dict[str, Any]]:
         try:
-            logger.info("Fetching Yad2 via ScraperAPI: %s", target_url)
-            resp = requests.get(
-                SCRAPER_API_URL,
-                params={
-                    "api_key": self.config.scraper_api_key,
-                    "url": target_url,
-                    "render": "false",
-                    "country_code": "il",
+            logger.info("Fetching Yad2 via Zyte API: %s", target_url)
+
+            auth = base64.b64encode(
+                f"{self.config.zyte_api_key}:".encode()
+            ).decode()
+
+            resp = requests.post(
+                ZYTE_API_URL,
+                headers={
+                    "Authorization": f"Basic {auth}",
+                    "Content-Type": "application/json",
                 },
-                headers=HEADERS,
+                json={
+                    "url": target_url,
+                    "httpResponseBody": True,
+                    "httpRequestMethod": "GET",
+                    "customHttpRequestHeaders": [
+                        {"name": "Accept", "value": "application/json"},
+                        {"name": "Referer", "value": "https://www.yad2.co.il/"},
+                    ],
+                },
                 timeout=60,
             )
-            logger.info("ScraperAPI status: %d", resp.status_code)
+            logger.info("Zyte API status: %d", resp.status_code)
 
             if resp.status_code != 200:
-                logger.warning("ScraperAPI returned %d: %s", resp.status_code, resp.text[:500])
+                logger.warning("Zyte API returned %d: %s", resp.status_code, resp.text[:500])
                 return []
 
-            data = resp.json()
+            zyte_data = resp.json()
+            body_b64 = zyte_data.get("httpResponseBody", "")
+            if not body_b64:
+                logger.warning("Zyte API returned empty httpResponseBody")
+                return []
+
+            body_bytes = base64.b64decode(body_b64)
+            data = json.loads(body_bytes)
             return self._parse_api_response(data)
 
         except Exception:
-            logger.exception("ScraperAPI request failed")
+            logger.exception("Zyte API request failed")
             return []
 
     # ── Response parsing ─────────────────────────────────────────────
