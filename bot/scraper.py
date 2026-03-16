@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import random
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 import httpx
 
@@ -12,6 +12,7 @@ from bot.config import Config
 logger = logging.getLogger(__name__)
 
 API_URL = "https://gw.yad2.co.il/recommendations/items/realestate"
+SCRAPER_API_URL = "https://api.scraperapi.com"
 YAD2_SEARCH_URL = "https://www.yad2.co.il/realestate/rent"
 
 USER_AGENTS = [
@@ -56,7 +57,7 @@ class Yad2Scraper:
         self._playwright_available: bool | None = None
 
     async def fetch_listings(self) -> list[dict[str, Any]]:
-        """Try httpx first, fall back to Playwright on 403/failure."""
+        """Try ScraperAPI/httpx first, fall back to Playwright on failure."""
         listings = await self._fetch_via_httpx()
         if listings:
             return listings
@@ -64,7 +65,7 @@ class Yad2Scraper:
         logger.warning("httpx fetch failed or returned 0 results, falling back to Playwright")
         return await self._fetch_via_playwright()
 
-    # ── httpx (lightweight) ──────────────────────────────────────────
+    # ── httpx (via ScraperAPI when available) ─────────────────────────
 
     async def _fetch_via_httpx(self) -> list[dict[str, Any]]:
         params = {
@@ -76,10 +77,26 @@ class Yad2Scraper:
             "subCategoriesIds": "2",
         }
 
+        target_url = f"{API_URL}?{urlencode(params)}"
+
         try:
             headers = _build_headers()
-            async with httpx.AsyncClient(headers=headers, timeout=30, follow_redirects=True) as client:
-                resp = await client.get(API_URL, params=params)
+            async with httpx.AsyncClient(headers=headers, timeout=60, follow_redirects=True) as client:
+                if self.config.scraper_api_key:
+                    # Route through ScraperAPI residential proxy
+                    proxy_params = {
+                        "api_key": self.config.scraper_api_key,
+                        "url": target_url,
+                        "render": "false",
+                        "country_code": "il",
+                    }
+                    url = SCRAPER_API_URL
+                    logger.info("Using ScraperAPI proxy for Yad2 request")
+                    resp = await client.get(url, params=proxy_params)
+                else:
+                    url = API_URL
+                    resp = await client.get(url, params=params)
+
                 logger.info("httpx Yad2 API status: %d", resp.status_code)
 
                 if resp.status_code == 403:
@@ -97,7 +114,7 @@ class Yad2Scraper:
             logger.exception("httpx request failed")
             return []
 
-    # ── Playwright (headless browser fallback) ───────────────────────
+    # ── Playwright (headless browser fallback with stealth) ───────────
 
     async def _fetch_via_playwright(self) -> list[dict[str, Any]]:
         if self._playwright_available is False:
@@ -106,9 +123,10 @@ class Yad2Scraper:
 
         try:
             from playwright.async_api import async_playwright
+            from playwright_stealth import stealth_async
             self._playwright_available = True
         except ImportError:
-            logger.error("Playwright is not installed — run: pip install playwright && playwright install chromium")
+            logger.error("Playwright or playwright-stealth is not installed")
             self._playwright_available = False
             return []
 
@@ -127,14 +145,22 @@ class Yad2Scraper:
             async with async_playwright() as pw:
                 browser = await pw.chromium.launch(
                     headless=True,
-                    args=["--no-sandbox", "--disable-dev-shm-usage"],
+                    args=[
+                        "--no-sandbox",
+                        "--disable-dev-shm-usage",
+                        "--disable-blink-features=AutomationControlled",
+                        "--disable-infobars",
+                        "--window-size=1920,1080",
+                    ],
                 )
                 context = await browser.new_context(
                     locale="he-IL",
                     user_agent=random.choice(USER_AGENTS),
                     viewport={"width": 1920, "height": 1080},
+                    java_script_enabled=True,
                 )
                 page = await context.new_page()
+                await stealth_async(page)
 
                 api_data: dict | None = None
 
@@ -151,8 +177,13 @@ class Yad2Scraper:
 
                 page.on("response", capture_api_response)
 
+                # Visit homepage first to get cookies and appear more natural
+                logger.info("Playwright: visiting homepage first")
+                await page.goto("https://www.yad2.co.il/", wait_until="domcontentloaded", timeout=30_000)
+                await page.wait_for_timeout(random.randint(2000, 4000))
+
+                # Now navigate to search
                 await page.goto(search_url, wait_until="networkidle", timeout=60_000)
-                # Give extra time for XHR calls
                 await page.wait_for_timeout(5_000)
 
                 await browser.close()
@@ -160,7 +191,7 @@ class Yad2Scraper:
             if api_data:
                 return self._parse_api_response(api_data)
 
-            logger.warning("Playwright: no API response captured, parsing page HTML")
+            logger.warning("Playwright: no API response captured")
             return []
 
         except Exception:
