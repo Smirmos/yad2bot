@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import json
 import logging
+import os
 import random
+import shutil
 from typing import Any
 from urllib.parse import urlencode
 
@@ -126,7 +127,17 @@ class Yad2Scraper:
 
         try:
             async with async_playwright() as pw:
-                browser = await pw.chromium.launch(headless=True)
+                launch_kwargs: dict[str, Any] = {"headless": True}
+
+                # On Railway/Linux the Playwright cache may be in a non-default
+                # location.  If the bundled chromium isn't found, try the
+                # system-installed one (from nixpkgs).
+                system_chromium = shutil.which("chromium") or shutil.which("chromium-browser")
+                if system_chromium:
+                    launch_kwargs["executable_path"] = system_chromium
+                    logger.info("Playwright: using system chromium at %s", system_chromium)
+
+                browser = await pw.chromium.launch(**launch_kwargs)
                 context = await browser.new_context(
                     locale="he-IL",
                     user_agent=random.choice(USER_AGENTS),
