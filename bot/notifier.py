@@ -26,10 +26,12 @@ class TelegramNotifier:
 
         lines = [
             "🤖 <b>Yad2Bot started</b>",
-            f"🏙 City: {config.city_id}",
+            f"🏙 Cities: {', '.join(config.cities)}",
         ]
         if config.area:
             lines.append(f"📍 Area: {config.area}")
+        if config.top_area:
+            lines.append(f"📍 Top area: {config.top_area}")
         if config.region:
             lines.append(f"📍 Region: {', '.join(config.region)}")
         lines.extend([
@@ -62,6 +64,7 @@ class TelegramNotifier:
     def _format_message(listing: dict[str, Any]) -> str:
         price = listing.get("price", "?")
         rooms = listing.get("rooms", "?")
+        city = listing.get("city", "")
         neighborhood = listing.get("neighborhood", "")
         street = listing.get("street", "")
         floor = listing.get("floor", "")
@@ -74,6 +77,8 @@ class TelegramNotifier:
             lines.append(f"💰 מחיר: ₪{price}")
         if rooms:
             lines.append(f"🛏 חדרים: {rooms}")
+        if city:
+            lines.append(f"🏙 עיר: {city}")
         if neighborhood:
             lines.append(f"📍 שכונה: {neighborhood}")
         if street:

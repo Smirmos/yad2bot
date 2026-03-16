@@ -34,14 +34,17 @@ class Yad2Scraper:
 
     def _build_search_url(self) -> str:
         params: dict[str, str] = {
-            "cityValues": self.config.city_id,
             "maxPrice": str(self.config.max_price),
             "roomValues": ",".join(self.config.rooms),
         }
+        if self.config.cities:
+            params["cityValues"] = ",".join(self.config.cities)
         if self.config.min_price:
             params["minPrice"] = str(self.config.min_price)
         if self.config.area:
             params["area"] = self.config.area
+        if self.config.top_area:
+            params["topArea"] = self.config.top_area
         if self.config.region:
             params["region"] = ",".join(self.config.region)
         if self.config.balcony:

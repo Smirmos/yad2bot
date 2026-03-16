@@ -11,8 +11,9 @@ class Config:
     max_price: int = 9000
     min_price: int = 0
     rooms: list[str] = field(default_factory=lambda: ["3", "3.5", "4"])
-    city_id: str = "5000"
+    cities: list[str] = field(default_factory=lambda: ["5000"])
     area: str = ""
+    top_area: str = ""
     region: list[str] = field(default_factory=list)
     check_interval_minutes: int = 15
     redis_url: str = ""
@@ -25,6 +26,7 @@ class Config:
     @classmethod
     def from_env(cls) -> Config:
         rooms_raw = os.getenv("ROOMS", "3,3.5,4")
+        cities_raw = os.getenv("CITIES", os.getenv("CITY_ID", "5000"))
         region_raw = os.getenv("REGION", "")
         region = [r.strip() for r in region_raw.split(",") if r.strip()]
         return cls(
@@ -33,8 +35,9 @@ class Config:
             max_price=int(os.getenv("MAX_PRICE", "9000")),
             min_price=int(os.getenv("MIN_PRICE", "0")),
             rooms=[r.strip() for r in rooms_raw.split(",")],
-            city_id=os.getenv("CITY_ID", "5000"),
+            cities=[c.strip() for c in cities_raw.split(",") if c.strip()],
             area=os.getenv("AREA", ""),
+            top_area=os.getenv("TOP_AREA", ""),
             region=region,
             check_interval_minutes=int(os.getenv("CHECK_INTERVAL_MINUTES", "15")),
             redis_url=os.environ["REDIS_URL"],
@@ -48,12 +51,14 @@ class Config:
     def active_filters_summary(self) -> str:
         """Human-readable summary of active search filters."""
         parts = [
-            f"city={self.city_id}",
+            f"cities={','.join(self.cities)}",
             f"rooms={','.join(self.rooms)}",
             f"price={self.min_price}-{self.max_price}",
         ]
         if self.area:
             parts.append(f"area={self.area}")
+        if self.top_area:
+            parts.append(f"topArea={self.top_area}")
         if self.region:
             parts.append(f"region={','.join(self.region)}")
         filters = []
