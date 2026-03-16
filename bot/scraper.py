@@ -43,8 +43,30 @@ class Yad2Scraper:
         logger.error("Both Yad2 endpoints failed to return listings")
         return []
 
+    def _boolean_filters(self) -> dict[str, str]:
+        """Build dict of active boolean filter params."""
+        filters: dict[str, str] = {}
+        if self.config.balcony:
+            filters["balcony"] = "1"
+        if self.config.parking:
+            filters["parking"] = "1"
+        if self.config.elevator:
+            filters["elevator"] = "1"
+        if self.config.mamad:
+            filters["shelter"] = "1"
+        return filters
+
+    def _area_params(self) -> dict[str, str]:
+        """Build dict of area/region params if configured."""
+        params: dict[str, str] = {}
+        if self.config.area:
+            params["area"] = self.config.area
+        if self.config.region:
+            params["region"] = ",".join(self.config.region)
+        return params
+
     def _build_recommendations_url(self) -> str:
-        params = {
+        params: dict[str, str] = {
             "type": "home",
             "count": "40",
             "categoryId": "2",
@@ -52,16 +74,20 @@ class Yad2Scraper:
             "cityValues": self.config.city_id,
             "subCategoriesIds": "2",
         }
+        params.update(self._area_params())
+        params.update(self._boolean_filters())
         return f"{YAD2_RECOMMENDATIONS_URL}?{urlencode(params)}"
 
     def _build_realestate_url(self) -> str:
-        params = {
+        params: dict[str, str] = {
             "cityValues": self.config.city_id,
             "maxPrice": str(self.config.max_price),
             "roomValues": ",".join(self.config.rooms),
         }
         if self.config.min_price:
             params["minPrice"] = str(self.config.min_price)
+        params.update(self._area_params())
+        params.update(self._boolean_filters())
         return f"{YAD2_REALESTATE_URL}?{urlencode(params)}"
 
     def _fetch(self, target_url: str) -> list[dict[str, Any]]:

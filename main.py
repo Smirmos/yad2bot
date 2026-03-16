@@ -57,13 +57,15 @@ async def main() -> None:
         asyncio.get_event_loop().add_signal_handler(sig, handle_signal)
 
     logger.info(
-        "Yad2Bot started — polling every %d minutes | city=%s rooms=%s price=%s-%s",
+        "Yad2Bot started — polling every %d minutes | %s",
         config.check_interval_minutes,
-        config.city_id,
-        config.rooms,
-        config.min_price,
-        config.max_price,
+        config.active_filters_summary(),
     )
+
+    try:
+        await notifier.send_startup_message(config)
+    except Exception:
+        logger.exception("Failed to send startup message to Telegram")
 
     while not stop_event.is_set():
         await poll_once(scraper, db, notifier)
