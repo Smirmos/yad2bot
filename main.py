@@ -24,18 +24,30 @@ logger = logging.getLogger(__name__)
 async def poll_once(scraper: Yad2Scraper, db: Database, notifier: TelegramNotifier) -> None:
     """Run a single poll cycle: fetch listings, filter new ones, notify."""
     try:
+        logger.info("--- Poll cycle start — %d IDs in Redis ---", db.seen_count())
+
         listings = await scraper.fetch_listings()
         logger.info("Fetched %d listings from Yad2", len(listings))
 
-        new_listings = [l for l in listings if not db.is_seen(l["id"])]
-        logger.info("Found %d new listings", len(new_listings))
+        new_listings = []
+        skipped = 0
+        for listing in listings:
+            lid = listing["id"]
+            if db.is_seen(lid):
+                skipped += 1
+            else:
+                new_listings.append(listing)
+
+        logger.info("New: %d | Already seen: %d", len(new_listings), skipped)
 
         for listing in new_listings:
+            lid = listing["id"]
             try:
                 await notifier.send_listing(listing)
-                db.mark_seen(listing["id"])
+                db.mark_seen(lid)
+                logger.info("Sent + saved listing %s (%s, %s)", lid, listing.get("city"), listing.get("price"))
             except Exception:
-                logger.exception("Failed to send listing %s", listing.get("id"))
+                logger.exception("Failed to send listing %s", lid)
 
     except Exception:
         logger.exception("Error during poll cycle")

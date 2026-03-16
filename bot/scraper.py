@@ -4,6 +4,7 @@ import base64
 import json
 import logging
 import re
+from collections import Counter
 from typing import Any
 from urllib.parse import urlencode
 
@@ -14,8 +15,10 @@ from bot.config import Config
 logger = logging.getLogger(__name__)
 
 ZYTE_API_URL = "https://api.zyte.com/v1/extract"
-
 YAD2_SEARCH_URL = "https://www.yad2.co.il/realestate/rent"
+
+MAX_PAGES = 10
+FEED_KEYS = ("private", "agency")
 
 
 class Yad2Scraper:
@@ -26,27 +29,79 @@ class Yad2Scraper:
         ).decode()
 
     async def fetch_listings(self) -> list[dict[str, Any]]:
-        """Fetch Yad2 listings via Zyte browser rendering."""
-        url = self._build_search_url()
-        return self._fetch_browser(url)
+        """Fetch listings: one request per city + optional area-based request."""
+        all_listings: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+
+        # One request per city
+        for city_id in self.config.cities:
+            city_listings = self._fetch_city(city_id=city_id)
+            for listing in city_listings:
+                if listing["id"] not in seen_ids:
+                    seen_ids.add(listing["id"])
+                    all_listings.append(listing)
+
+        # Area-based request (e.g. הוד השרון with topArea/area, no cityValues)
+        if self.config.area:
+            area_listings = self._fetch_city(city_id=None)
+            for listing in area_listings:
+                if listing["id"] not in seen_ids:
+                    seen_ids.add(listing["id"])
+                    all_listings.append(listing)
+
+        # Log city distribution
+        city_counts = Counter(l["city"] for l in all_listings)
+        for city, count in city_counts.most_common():
+            logger.info("City '%s': %d listings", city, count)
+        logger.info("Total unique listings: %d", len(all_listings))
+
+        return all_listings
+
+    # ── Per-city fetch with pagination ───────────────────────────────
+
+    def _fetch_city(self, city_id: str | None) -> list[dict[str, Any]]:
+        """Fetch all pages for a single city or area."""
+        all_items: list[dict[str, Any]] = []
+        label = f"city={city_id}" if city_id else f"area={self.config.area}"
+
+        for page in range(1, MAX_PAGES + 1):
+            url = self._build_search_url(city_id=city_id, page=page)
+            logger.info("[%s page=%d] URL: %s", label, page, url)
+
+            items = self._fetch_page(url)
+            if not items:
+                logger.info("[%s page=%d] No items, stopping pagination", label, page)
+                break
+
+            all_items.extend(items)
+            logger.info("[%s page=%d] Got %d items (total so far: %d)", label, page, len(items), len(all_items))
+
+            # If we got fewer than ~20 items, likely the last page
+            if len(items) < 15:
+                break
+
+        logger.info("[%s] Total: %d listings across %d pages", label, len(all_items), min(page, MAX_PAGES))
+        return all_items
 
     # ── URL builder ──────────────────────────────────────────────────
 
-    def _build_search_url(self) -> str:
+    def _build_search_url(self, city_id: str | None, page: int = 1) -> str:
         params: dict[str, str] = {
             "maxPrice": str(self.config.max_price),
             "roomValues": ",".join(self.config.rooms),
         }
-        if self.config.cities:
-            params["cityValues"] = ",".join(self.config.cities)
+        if city_id:
+            params["cityValues"] = city_id
+        else:
+            # Area-only request (no city) — add area/topArea/region
+            if self.config.area:
+                params["area"] = self.config.area
+            if self.config.top_area:
+                params["topArea"] = self.config.top_area
+            if self.config.region:
+                params["region"] = ",".join(self.config.region)
         if self.config.min_price:
             params["minPrice"] = str(self.config.min_price)
-        if self.config.area:
-            params["area"] = self.config.area
-        if self.config.top_area:
-            params["topArea"] = self.config.top_area
-        if self.config.region:
-            params["region"] = ",".join(self.config.region)
         if self.config.balcony:
             params["balcony"] = "1"
         if self.config.parking:
@@ -55,14 +110,14 @@ class Yad2Scraper:
             params["elevator"] = "1"
         if self.config.mamad:
             params["shelter"] = "1"
+        if page > 1:
+            params["page"] = str(page)
         return f"{YAD2_SEARCH_URL}?{urlencode(params)}"
 
-    # ── Zyte browser fetch ───────────────────────────────────────────
+    # ── Zyte browser fetch (single page) ─────────────────────────────
 
-    def _fetch_browser(self, target_url: str) -> list[dict[str, Any]]:
+    def _fetch_page(self, target_url: str) -> list[dict[str, Any]]:
         try:
-            logger.info("Fetching Yad2 via Zyte browserHtml: %s", target_url)
-
             resp = requests.post(
                 ZYTE_API_URL,
                 headers={
@@ -96,9 +151,6 @@ class Yad2Scraper:
 
     # ── HTML / __NEXT_DATA__ parsing ─────────────────────────────────
 
-    # Feed categories we want (real listings, not boosted ads)
-    FEED_KEYS = ("private", "agency")
-
     def _parse_next_data(self, html: str) -> list[dict[str, Any]]:
         match = re.search(
             r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>',
@@ -129,9 +181,14 @@ class Yad2Scraper:
             count = len(val) if isinstance(val, list) else "N/A"
             logger.info("  feed[%s]: %s items", key, count)
 
+        # Check for pagination info
+        pagination = page_props.get("pagination", {})
+        if pagination:
+            logger.info("Pagination info: %s", pagination)
+
         # Collect items from private + agency only
         items: list[dict] = []
-        for key in self.FEED_KEYS:
+        for key in FEED_KEYS:
             group = feed.get(key, [])
             if isinstance(group, list):
                 items.extend(group)
@@ -141,9 +198,8 @@ class Yad2Scraper:
             logger.warning("No items in feed[private/agency]")
             return []
 
-        # Log first item's full structure for field mapping
+        # Log sample listing on first page
         logger.info("Sample listing keys: %s", list(items[0].keys()))
-        logger.info("Sample listing: %s", json.dumps(items[0], ensure_ascii=False, default=str)[:1000])
 
         listings = []
         for item in items:
@@ -153,7 +209,7 @@ class Yad2Scraper:
             if listing and self._matches_price(listing):
                 listings.append(listing)
 
-        logger.info("Parsed %d listings from __NEXT_DATA__", len(listings))
+        logger.info("Parsed %d listings from page", len(listings))
         return listings
 
     # ── Listing normalization ────────────────────────────────────────
