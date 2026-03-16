@@ -170,6 +170,12 @@ class Yad2Scraper:
             return []
 
         page_props = next_data.get("props", {}).get("pageProps", {})
+
+        # Log what query Yad2 actually resolved
+        query = next_data.get("query", {})
+        if query:
+            logger.info("__NEXT_DATA__ query: %s", query)
+
         feed = page_props.get("feed", {})
 
         if not isinstance(feed, dict):

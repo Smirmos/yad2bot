@@ -25,9 +25,13 @@ class Config:
 
     @classmethod
     def from_env(cls) -> Config:
+        import logging
+        _log = logging.getLogger(__name__)
+
         rooms_raw = os.getenv("ROOMS", "3,3.5,4")
         cities_raw = os.getenv("CITIES", os.getenv("CITY_ID", "5000"))
         region_raw = os.getenv("REGION", "")
+        _log.info("ENV CITIES=%r  CITY_ID=%r  resolved=%r", os.getenv("CITIES"), os.getenv("CITY_ID"), cities_raw)
         region = [r.strip() for r in region_raw.split(",") if r.strip()]
         return cls(
             telegram_token=os.environ["TELEGRAM_TOKEN"],
