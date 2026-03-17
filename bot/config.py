@@ -6,16 +6,11 @@ from dataclasses import dataclass, field
 
 @dataclass(frozen=True)
 class Config:
-    telegram_token: str
     telegram_chat_id: str
     max_price: int = 9000
     min_price: int = 0
     rooms: list[str] = field(default_factory=lambda: ["3", "3.5", "4"])
-    cities: list[str] = field(default_factory=lambda: ["5000"])
-    area: str = ""
-    top_area: str = ""
-    region: list[str] = field(default_factory=list)
-    check_interval_minutes: int = 15
+    check_interval_minutes: int = 300
     redis_url: str = ""
     zyte_api_key: str = ""
     balcony: bool = False
@@ -25,25 +20,13 @@ class Config:
 
     @classmethod
     def from_env(cls) -> Config:
-        import logging
-        _log = logging.getLogger(__name__)
-
         rooms_raw = os.getenv("ROOMS", "3,3.5,4")
-        cities_raw = os.getenv("CITIES", os.getenv("CITY_ID", "5000"))
-        region_raw = os.getenv("REGION", "")
-        _log.info("ENV CITIES=%r  CITY_ID=%r  resolved=%r", os.getenv("CITIES"), os.getenv("CITY_ID"), cities_raw)
-        region = [r.strip() for r in region_raw.split(",") if r.strip()]
         return cls(
-            telegram_token=os.environ["TELEGRAM_TOKEN"],
             telegram_chat_id=os.environ["TELEGRAM_CHAT_ID"],
             max_price=int(os.getenv("MAX_PRICE", "9000")),
             min_price=int(os.getenv("MIN_PRICE", "0")),
             rooms=[r.strip() for r in rooms_raw.split(",")],
-            cities=[c.strip() for c in cities_raw.split(",") if c.strip()],
-            area=os.getenv("AREA", ""),
-            top_area=os.getenv("TOP_AREA", ""),
-            region=region,
-            check_interval_minutes=int(os.getenv("CHECK_INTERVAL_MINUTES", "15")),
+            check_interval_minutes=int(os.getenv("CHECK_INTERVAL_MINUTES", "300")),
             redis_url=os.environ["REDIS_URL"],
             zyte_api_key=os.environ["ZYTE_API_KEY"],
             balcony=os.getenv("FILTER_BALCONY", "0") == "1",
@@ -51,29 +34,3 @@ class Config:
             elevator=os.getenv("FILTER_ELEVATOR", "0") == "1",
             mamad=os.getenv("FILTER_MAMAD", "0") == "1",
         )
-
-    def active_filters_summary(self) -> str:
-        """Human-readable summary of active search filters."""
-        parts = [
-            f"cities={','.join(self.cities)}",
-            f"rooms={','.join(self.rooms)}",
-            f"price={self.min_price}-{self.max_price}",
-        ]
-        if self.area:
-            parts.append(f"area={self.area}")
-        if self.top_area:
-            parts.append(f"topArea={self.top_area}")
-        if self.region:
-            parts.append(f"region={','.join(self.region)}")
-        filters = []
-        if self.balcony:
-            filters.append("balcony")
-        if self.parking:
-            filters.append("parking")
-        if self.elevator:
-            filters.append("elevator")
-        if self.mamad:
-            filters.append("mamad")
-        if filters:
-            parts.append(f"filters={','.join(filters)}")
-        return " | ".join(parts)

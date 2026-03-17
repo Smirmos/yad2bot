@@ -4,7 +4,6 @@ import redis
 
 logger = logging.getLogger(__name__)
 
-SEEN_KEY = "seen_listings"
 TTL_DAYS = 30
 
 
@@ -12,22 +11,21 @@ class Database:
     def __init__(self, redis_url: str) -> None:
         self.r = redis.from_url(redis_url, decode_responses=True)
         self.r.ping()
-        count = self.r.scard(SEEN_KEY)
-        logger.info("Connected to Redis — %d seen listings stored", count)
+        logger.info("Connected to Redis")
 
-    def seen_count(self) -> int:
-        return self.r.scard(SEEN_KEY)
+    def _key(self, city_slug: str) -> str:
+        return f"seen:{city_slug}"
 
-    def is_seen(self, listing_id: str) -> bool:
-        result = self.r.sismember(SEEN_KEY, str(listing_id))
-        if result:
-            logger.debug("Listing %s already seen, skipping", listing_id)
-        return bool(result)
+    def seen_count(self, city_slug: str) -> int:
+        return self.r.scard(self._key(city_slug))
 
-    def mark_seen(self, listing_id: str) -> None:
-        self.r.sadd(SEEN_KEY, str(listing_id))
-        self.r.expire(SEEN_KEY, TTL_DAYS * 86400)
-        logger.debug("Marked listing %s as seen", listing_id)
+    def is_seen(self, city_slug: str, listing_id: str) -> bool:
+        return bool(self.r.sismember(self._key(city_slug), str(listing_id)))
+
+    def mark_seen(self, city_slug: str, listing_id: str) -> None:
+        key = self._key(city_slug)
+        self.r.sadd(key, str(listing_id))
+        self.r.expire(key, TTL_DAYS * 86400)
 
     def close(self) -> None:
         self.r.close()
