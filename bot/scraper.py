@@ -18,7 +18,7 @@ ZYTE_API_URL = "https://api.zyte.com/v1/extract"
 YAD2_SEARCH_URL = "https://www.yad2.co.il/realestate/rent"
 
 MAX_PAGES = 10
-FEED_KEYS = ("private", "agency")
+FEED_KEYS = ("private",)
 
 
 class Yad2Scraper:
@@ -71,6 +71,8 @@ class Yad2Scraper:
             params["elevator"] = "1"
         if self.config.mamad:
             params["shelter"] = "1"
+        params["imageOnly"] = "1"
+        params["sort"] = "date-desc"
         if page > 1:
             params["page"] = str(page)
         return f"{YAD2_SEARCH_URL}?{urlencode(params)}"
@@ -152,7 +154,7 @@ class Yad2Scraper:
                 items.extend(group)
 
         if not items:
-            logger.warning("No items in feed[private/agency]")
+            logger.warning("No items in feed[private]")
             return []
 
         listings = []
