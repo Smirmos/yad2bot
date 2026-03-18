@@ -17,7 +17,6 @@ logger = logging.getLogger(__name__)
 ZYTE_API_URL = "https://api.zyte.com/v1/extract"
 YAD2_SEARCH_URL = "https://www.yad2.co.il/realestate/rent"
 
-MAX_PAGES = 10
 FEED_KEYS = ("private",)
 
 
@@ -29,30 +28,17 @@ class Yad2Scraper:
         ).decode()
 
     def fetch_city(self, city: CityConfig) -> list[dict[str, Any]]:
-        """Fetch all pages for a single city."""
-        all_items: list[dict[str, Any]] = []
+        """Fetch the first page for a single city (sorted newest-first)."""
+        url = self._build_url(city)
+        logger.info("[%s] %s", city.name, url)
 
-        for page in range(1, MAX_PAGES + 1):
-            url = self._build_url(city, page)
-            logger.info("[%s page=%d] %s", city.name, page, url)
-
-            items = self._fetch_page(url)
-            if not items:
-                logger.info("[%s page=%d] No items, stopping", city.name, page)
-                break
-
-            all_items.extend(items)
-            logger.info("[%s page=%d] %d items (total: %d)", city.name, page, len(items), len(all_items))
-
-            if len(items) < 15:
-                break
-
-        logger.info("[%s] Total: %d listings", city.name, len(all_items))
-        return all_items
+        items = self._fetch_page(url)
+        logger.info("[%s] %d listings from page 1", city.name, len(items))
+        return items
 
     # ── URL builder ──────────────────────────────────────────────────
 
-    def _build_url(self, city: CityConfig, page: int = 1) -> str:
+    def _build_url(self, city: CityConfig) -> str:
         params: dict[str, str] = {
             "topArea": str(city.top_area),
             "area": str(city.area),
@@ -73,8 +59,6 @@ class Yad2Scraper:
             params["shelter"] = "1"
         params["imageOnly"] = "1"
         params["sort"] = "date-desc"
-        if page > 1:
-            params["page"] = str(page)
         return f"{YAD2_SEARCH_URL}?{urlencode(params)}"
 
     # ── Zyte browser fetch ───────────────────────────────────────────
