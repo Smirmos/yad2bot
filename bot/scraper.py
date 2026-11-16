@@ -50,7 +50,9 @@ class Yad2Scraper:
         params["maxPrice"] = str(self.config.max_price)
         if self.config.min_price:
             params["minPrice"] = str(self.config.min_price)
-        params["roomValues"] = ",".join(self.config.rooms)
+        # Yad2 ignores roomValues; it filters on a minRooms..maxRooms range
+        params["minRooms"] = min(self.config.rooms, key=float)
+        params["maxRooms"] = max(self.config.rooms, key=float)
         if self.config.balcony:
             params["balcony"] = "1"
         if self.config.parking:
