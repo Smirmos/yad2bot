@@ -17,10 +17,12 @@ class Config:
     parking: bool = False
     elevator: bool = False
     mamad: bool = False
+    enabled_cities: list[str] = field(default_factory=list)  # city slugs; empty = all
 
     @classmethod
     def from_env(cls) -> Config:
         rooms_raw = os.getenv("ROOMS", "3,3.5,4")
+        enabled_raw = os.getenv("ENABLED_CITIES", "")
         return cls(
             telegram_chat_id=os.environ["TELEGRAM_CHAT_ID"],
             max_price=int(os.getenv("MAX_PRICE", "9000")),
@@ -33,4 +35,5 @@ class Config:
             parking=os.getenv("FILTER_PARKING", "0") == "1",
             elevator=os.getenv("FILTER_ELEVATOR", "0") == "1",
             mamad=os.getenv("FILTER_MAMAD", "0") == "1",
+            enabled_cities=[c.strip() for c in enabled_raw.split(",") if c.strip()],
         )

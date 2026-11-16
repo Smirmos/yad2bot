@@ -61,6 +61,9 @@ async def main() -> None:
     # Build per-city notifiers (skip cities without a token)
     city_notifiers: list[tuple[CityConfig, TelegramNotifier]] = []
     for city in CITIES:
+        if config.enabled_cities and city.slug not in config.enabled_cities:
+            logger.info("%s not in ENABLED_CITIES, skipping", city.name)
+            continue
         token = os.getenv(city.token_env, "")
         if not token:
             logger.warning("No token for %s (%s), skipping", city.name, city.token_env)
