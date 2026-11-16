@@ -54,4 +54,12 @@ CITIES: list[CityConfig] = [
         token_env="TELEGRAM_TOKEN_HOD_HASHARON",
         slug="hod_hasharon",
     ),
+    CityConfig(
+        name="חיפה",
+        top_area=25,
+        area=5,
+        city_id=4000,
+        token_env="TELEGRAM_TOKEN_HAIFA",
+        slug="haifa",
+    ),
 ]
