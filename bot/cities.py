@@ -55,10 +55,10 @@ CITIES: list[CityConfig] = [
         slug="hod_hasharon",
     ),
     CityConfig(
-        name="חיפה",
+        name="חיפה והסביבה",  # whole area 5: Haifa, Tirat Carmel, Nesher
         top_area=25,
         area=5,
-        city_id=4000,
+        city_id=None,
         token_env="TELEGRAM_TOKEN_HAIFA",
         slug="haifa",
     ),

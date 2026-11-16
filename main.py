@@ -91,7 +91,7 @@ async def main() -> None:
         config.check_interval_minutes,
         config.min_price,
         config.max_price,
-        ",".join(config.rooms),
+        ",".join(config.rooms) or "any",
     )
 
     # Send startup messages

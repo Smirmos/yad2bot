@@ -65,8 +65,9 @@ class TelegramNotifier:
         sqm = listing.get("square_meters", "")
         link = listing.get("link", "")
 
+        # Area-wide searches span several cities; show the listing's own
         lines = [
-            f"🏠 <b>דירה להשכרה — {city_name}</b>",
+            f"🏠 <b>דירה להשכרה — {listing.get('city') or city_name}</b>",
         ]
         if price:
             lines.append(f"💰 מחיר: ₪{price}")
