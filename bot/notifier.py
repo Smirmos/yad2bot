@@ -3,7 +3,7 @@ import logging
 from typing import Any
 
 from telegram import Bot
-from telegram.error import RetryAfter
+from telegram.error import BadRequest, RetryAfter
 
 logger = logging.getLogger(__name__)
 
@@ -15,15 +15,23 @@ class TelegramNotifier:
         self.bot = Bot(token=token)
         self.chat_id = chat_id
 
-    async def _send(self, text: str, disable_preview: bool = True) -> None:
+    async def _send(self, text: str, disable_preview: bool = True, photo: str = "") -> None:
         while True:
             try:
-                await self.bot.send_message(
-                    chat_id=self.chat_id,
-                    text=text,
-                    parse_mode="HTML",
-                    disable_web_page_preview=disable_preview,
-                )
+                if photo:
+                    await self.bot.send_photo(
+                        chat_id=self.chat_id,
+                        photo=photo,
+                        caption=text,
+                        parse_mode="HTML",
+                    )
+                else:
+                    await self.bot.send_message(
+                        chat_id=self.chat_id,
+                        text=text,
+                        parse_mode="HTML",
+                        disable_web_page_preview=disable_preview,
+                    )
                 return
             except RetryAfter as e:
                 wait = e.retry_after + 1
@@ -35,7 +43,15 @@ class TelegramNotifier:
 
     async def send_listing(self, listing: dict[str, Any], city_name: str) -> None:
         message = self._format_message(listing, city_name)
-        await self._send(message, disable_preview=False)
+        image = listing.get("image", "")
+        try:
+            await self._send(message, disable_preview=False, photo=image)
+        except BadRequest:
+            if not image:
+                raise
+            # Telegram couldn't fetch the photo URL; don't lose the listing
+            logger.warning("Photo failed for %s, sending text only", listing["id"])
+            await self._send(message, disable_preview=False)
         logger.info("Sent listing %s to Telegram", listing["id"])
         await asyncio.sleep(MESSAGE_DELAY)
 

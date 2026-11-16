@@ -191,5 +191,6 @@ class Yad2Scraper:
             "floor": str(address.get("house", {}).get("floor", "") or ""),
             "square_meters": str(details.get("squareMeter", "") or ""),
             "description": meta.get("description", ""),
+            "image": meta.get("coverImage") or "",
             "link": f"https://www.yad2.co.il/item/{token}",
         }
