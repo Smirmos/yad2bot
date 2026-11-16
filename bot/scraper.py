@@ -17,7 +17,9 @@ logger = logging.getLogger(__name__)
 ZYTE_API_URL = "https://api.zyte.com/v1/extract"
 YAD2_SEARCH_URL = "https://www.yad2.co.il/realestate/rent"
 
-FEED_KEYS = ("private",)
+# Feed sections holding search results; each item's adType is "private" or
+# "commercial" (broker). Only private ads are kept.
+FEED_KEYS = ("yad2", "platinum", "booster")
 
 
 class Yad2Scraper:
@@ -135,18 +137,23 @@ class Yad2Scraper:
         for key in FEED_KEYS:
             group = feed.get(key, [])
             if isinstance(group, list):
-                items.extend(group)
+                items.extend(
+                    i for i in group
+                    if isinstance(i, dict) and i.get("adType") == "private"
+                )
 
         if not items:
-            logger.warning("No items in feed[private]")
+            logger.warning("No private ads in feed%s", list(FEED_KEYS))
             return []
 
         listings = []
+        seen_ids: set[str] = set()
         for item in items:
-            if not isinstance(item, dict):
-                continue
             listing = self._normalize(item)
-            if listing and self._matches_price(listing):
+            if not listing or listing["id"] in seen_ids:
+                continue
+            seen_ids.add(listing["id"])
+            if self._matches_price(listing):
                 listings.append(listing)
 
         logger.info("Parsed %d listings from page", len(listings))
